@@ -1,8 +1,9 @@
+#[derive(Debug)]
 pub struct IPV4Header<'a> {
     version: u8,
-    ihl: u8, 
-    dspc: u8, 
-    ecn: u8, 
+    ihl: u8,
+    dspc: u8,
+    ecn: u8,
     total_length: u16,
     id: u16,
     flags: u8,
@@ -12,7 +13,7 @@ pub struct IPV4Header<'a> {
     checksum: u16,
     source_address: u32,
     destination_address: u32,
-    options: &'a[u8]
+    options: &'a [u8],
 }
 
 //[vvvv, iiii] high low per byte
@@ -26,13 +27,14 @@ impl<'a> IPV4Header<'a> {
         let (flags, offset) = IPV4Header::get_flags_and_offset(buf);
         let (ttl, protocol) = IPV4Header::get_ttl_and_protocol(buf);
         let checksum = IPV4Header::get_checksum(buf);
-        let (source_address, destination_address) = IPV4Header::get_source_and_destination_address(buf);
+        let (source_address, destination_address) =
+            IPV4Header::get_source_and_destination_address(buf);
         let header_length = 4 * ihl as usize;
         Self {
             version,
-            ihl, 
-            dspc, 
-            ecn, 
+            ihl,
+            dspc,
+            ecn,
             total_length,
             id,
             flags,
@@ -44,6 +46,14 @@ impl<'a> IPV4Header<'a> {
             destination_address,
             options: &buf[20..header_length],
         }
+    }
+
+    pub fn get_ihl(&self) -> u8 {
+        self.ihl
+    }
+
+    pub fn get_protocol(&self) -> u8 {
+        self.protocol
     }
 
     fn get_version_and_ihl(value: u8) -> (u8, u8) {
@@ -76,7 +86,9 @@ impl<'a> IPV4Header<'a> {
     }
 
     fn get_source_and_destination_address(buf: &[u8]) -> (u32, u32) {
-        (u32::from_be_bytes([buf[12], buf[13], buf[14], buf[15]]),
-            u32::from_be_bytes([buf[16], buf[17], buf[18], buf[19]]))
+        (
+            u32::from_be_bytes([buf[12], buf[13], buf[14], buf[15]]),
+            u32::from_be_bytes([buf[16], buf[17], buf[18], buf[19]]),
+        )
     }
 }
