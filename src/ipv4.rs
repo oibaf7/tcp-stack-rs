@@ -1,4 +1,4 @@
-#[derive(Debug)]
+#[derive(Debug, Default, Hash, PartialEq, Eq)]
 pub struct IPV4Header<'a> {
     version: u8,
     ihl: u8,
@@ -48,8 +48,8 @@ impl<'a> IPV4Header<'a> {
         }
     }
 
-    pub fn get_ihl(&self) -> u8 {
-        self.ihl
+    pub fn get_header_length(&self) -> usize {
+        (self.ihl * 4) as usize
     }
 
     pub fn get_protocol(&self) -> u8 {
@@ -90,5 +90,57 @@ impl<'a> IPV4Header<'a> {
             u32::from_be_bytes([buf[12], buf[13], buf[14], buf[15]]),
             u32::from_be_bytes([buf[16], buf[17], buf[18], buf[19]]),
         )
+    }
+
+    pub fn build_raw_header(
+        version: u8,
+        ihl: u8,
+        dspc: u8,
+        ecn: u8,
+        total_length: u16,
+        id: u16,
+        flags: u8,
+        offset: u16,
+        ttl: u8,
+        protocol: u8,
+        source_address: u32,
+        destination_address: u32,
+        options: Option<&'a [u8]>,
+    ) -> Vec<u8> {
+        let mut buf = [0u8; 20];
+        let options = options.unwrap_or(&[]);
+        buf[0] = (version << 4) | ihl;
+        buf[1] = (dspc << 2) | ecn;
+        buf[2..4].copy_from_slice(&u16::to_be_bytes(total_length));
+        buf[4..6].copy_from_slice(&u16::to_be_bytes(id));
+        buf[6..8].copy_from_slice(&u16::to_be_bytes(((flags as u16) << 13) | offset));
+        buf[8] = ttl;
+        buf[9] = protocol;
+        //checksum setup
+        buf[10] = 0;
+        buf[11] = 0;
+        //checksum setup end
+        buf[12..16].copy_from_slice(&u32::to_be_bytes(source_address));
+        buf[16..20].copy_from_slice(&u32::to_be_bytes(destination_address));
+        let mut vec = buf.to_vec();
+        options.into_iter().for_each(|x| vec.push(*x));
+        IPV4Header::calculate_checksum(&mut vec);
+
+        vec
+    }
+
+    fn calculate_checksum(buf: &mut [u8]) {
+        let mut sum = 0u32;
+        let chunks = buf.chunks_exact(2);
+        for chunk in chunks {
+            sum += u16::from_be_bytes([chunk[0], chunk[1]]) as u32;
+        }
+        let mut remainder = (sum >> 16);
+        while remainder != 0 {
+            sum += remainder;
+            remainder = (sum >> 16);
+        }
+
+        buf[10..12].copy_from_slice(&u16::to_be_bytes(!(sum as u16)));
     }
 }
