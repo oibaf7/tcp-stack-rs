@@ -48,6 +48,14 @@ impl<'a> IPV4Header<'a> {
         }
     }
 
+    pub fn get_source_address(&self) -> u32 {
+        self.source_address
+    }
+
+    pub fn get_destination_address(&self) -> u32 {
+        self.destination_address
+    }
+
     pub fn get_header_length(&self) -> usize {
         (self.ihl * 4) as usize
     }

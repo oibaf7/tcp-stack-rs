@@ -1,8 +1,10 @@
 use std::collections::HashMap;
 
+use tcp_stack::tcp::Connection;
 use tcp_stack::{ipv4, tcp};
 use tun_tap::{Iface, Mode};
 
+//move somewhere else eventually
 #[derive(Default, Hash, PartialEq, Eq)]
 struct ConnectionKey {
     //ip address, port number
@@ -12,7 +14,7 @@ struct ConnectionKey {
 
 fn main() {
     let iface = Iface::new("tun0", Mode::Tun).expect("failed!");
-    let connections: HashMap<ConnectionKey, tcp::Connection> = HashMap::new();
+    let mut connections: HashMap<ConnectionKey, tcp::Connection> = HashMap::new();
     let mut buf = [0u8; 1504];
     loop {
         let nbytes = iface.recv(&mut buf).expect("failed to recv");
@@ -29,13 +31,26 @@ fn main() {
         let tcp_header = tcp::TcpHeader::build(&buf[4 + ipv4_header_length..nbytes]);
         let tcp_header_length = tcp_header.get_header_length();
         let payload = &buf[4 + ipv4_header_length + tcp_header_length..nbytes];
-        eprintln!(
-            "received {} proto: {:x} ipv4 header: {:#?} tcp header: {:#?} bytes: {:?}",
-            nbytes - 4,
-            eth_proto,
-            ipv4_header,
-            tcp_header,
-            payload
-        );
+        //check if in hashmap, if not create connection, do on packet, on packet should handle everything
+        let connectionKey = ConnectionKey {
+            source: (
+                ipv4_header.get_source_address(),
+                tcp_header.get_source_port(),
+            ),
+            destination: (
+                ipv4_header.get_destination_address(),
+                tcp_header.get_source_port(),
+            ),
+        };
+        let connection = connections.get_mut(&connectionKey);
+        if let Some(c) = connection {
+            c.on_packet(&iface, payload, &tcp_header, &ipv4_header);
+        } else {
+            let mut c = Connection::default();
+            c.on_packet(&iface, payload, &tcp_header, &ipv4_header);
+            connections.insert(connectionKey, c);
+        }
+
+        
     }
 }
