@@ -131,7 +131,7 @@ impl<'a> IPV4Header<'a> {
         buf[12..16].copy_from_slice(&u32::to_be_bytes(source_address));
         buf[16..20].copy_from_slice(&u32::to_be_bytes(destination_address));
         let mut vec = buf.to_vec();
-        options.into_iter().for_each(|x| vec.push(*x));
+        vec.extend_from_slice(&options[..]);
         IPV4Header::calculate_checksum(&mut vec);
 
         vec
@@ -145,7 +145,7 @@ impl<'a> IPV4Header<'a> {
         }
         let mut remainder = (sum >> 16);
         while remainder != 0 {
-            sum += remainder;
+            sum = (sum & 0xFFFF) + remainder;
             remainder = (sum >> 16);
         }
 

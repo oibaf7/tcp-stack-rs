@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use tcp_stack::tcp::Connection;
-use tcp_stack::{ipv4, tcp};
+use tcp_stack::{ipv4, tcp, tcp_header};
 use tun_tap::{Iface, Mode};
 
 //move somewhere else eventually
@@ -28,7 +28,7 @@ fn main() {
         if ipv4_header.get_protocol() != 0x0006 {
             continue;
         }
-        let tcp_header = tcp::TcpHeader::build(&buf[4 + ipv4_header_length..nbytes]);
+        let tcp_header = tcp_header::TcpHeader::build(&buf[4 + ipv4_header_length..nbytes]);
         let tcp_header_length = tcp_header.get_header_length();
         let payload = &buf[4 + ipv4_header_length + tcp_header_length..nbytes];
         //check if in hashmap, if not create connection, do on packet, on packet should handle everything
@@ -50,7 +50,5 @@ fn main() {
             c.on_packet(&iface, payload, &tcp_header, &ipv4_header);
             connections.insert(connectionKey, c);
         }
-
-        
     }
 }
