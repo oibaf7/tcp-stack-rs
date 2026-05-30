@@ -4,14 +4,7 @@ pub struct TcpHeader<'a> {
     seq: u32,
     ack_number: u32,
     offset: u8,
-    cwr: bool,
-    ece: bool,
-    urg: bool,
-    ack_flag: bool,
-    psh: bool,
-    rst: bool,
-    syn: bool,
-    fin: bool,
+    flags: TcpFlags,
     window_size: u16,
     checksum: u16,
     urg_pointer: u16,
@@ -35,19 +28,25 @@ impl<'a> TcpHeader<'a> {
             seq,
             ack_number,
             offset,
-            cwr,
-            ece,
-            urg,
-            ack_flag,
-            psh,
-            rst,
-            syn,
-            fin,
+            flags: TcpFlags {
+                cwr,
+                ece,
+                urg,
+                ack_flag,
+                psh,
+                rst,
+                syn,
+                fin,
+            },
             window_size,
             checksum,
             urg_pointer,
             options: parse_options(&buf[20..header_length]),
         }
+    }
+
+    pub fn get_window_size(&self) -> u16 {
+        self.window_size
     }
 
     pub fn get_sequence_number(&self) -> u32 {
@@ -75,11 +74,15 @@ impl<'a> TcpHeader<'a> {
     }
 
     pub fn is_syn(&self) -> bool {
-        self.syn
+        self.flags.syn
     }
 
     pub fn is_ack(&self) -> bool {
-        self.ack_flag
+        self.flags.ack_flag
+    }
+
+    pub fn is_fin(&self) -> bool {
+        self.flags.fin
     }
 
     fn get_source_and_destination_port(buf: &[u8]) -> (u16, u16) {
@@ -130,14 +133,7 @@ impl<'a> TcpHeader<'a> {
         destination_port: u16,
         seq: u32,
         ack_number: u32,
-        cwr: bool,
-        ece: bool,
-        urg: bool,
-        ack_flag: bool,
-        psh: bool,
-        rst: bool,
-        syn: bool,
-        fin: bool,
+        flags: TcpFlags,
         window_size: u16,
         urg_pointer: u16,
         options: Option<&[TcpOption<'_>]>,
@@ -150,6 +146,16 @@ impl<'a> TcpHeader<'a> {
         let options = build_options(options.unwrap_or(&[]));
         debug_assert_eq!(options.len() % 4, 0, "options not 4-byte aligned");
         let offset = (5 + options.len() / 4) as u8;
+        let TcpFlags {
+            urg,
+            ack_flag,
+            psh,
+            rst,
+            syn,
+            fin,
+            ece,
+            cwr,
+        } = flags;
         buf[0..2].copy_from_slice(&u16::to_be_bytes(source_port));
         buf[2..4].copy_from_slice(&u16::to_be_bytes(destination_port));
         buf[4..8].copy_from_slice(&u32::to_be_bytes(seq));
@@ -210,7 +216,6 @@ impl<'a> TcpHeader<'a> {
 
         buf[16..18].copy_from_slice(&u16::to_be_bytes(!(sum as u16)));
     }
-
 }
 
 pub enum TcpOption<'a> {
@@ -397,7 +402,7 @@ fn build_options(opts: &[TcpOption]) -> Vec<u8> {
 #[derive(Default)]
 pub struct TcpFlags {
     pub urg: bool,
-    pub ack: bool,
+    pub ack_flag: bool,
     pub psh: bool,
     pub rst: bool,
     pub syn: bool,

@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use tcp_stack::tcp::Connection;
+use tcp_stack::tcp::{Connection, State};
 use tcp_stack::{ipv4, tcp, tcp_header};
 use tun_tap::{Iface, Mode};
 
@@ -12,6 +12,7 @@ struct ConnectionKey {
     destination: (u32, u16),
 }
 
+//eventually make cleaner but now focus on tcp state machine
 fn main() {
     let iface = Iface::new("tun0", Mode::Tun).expect("failed!");
     let mut connections: HashMap<ConnectionKey, tcp::Connection> = HashMap::new();
@@ -32,7 +33,7 @@ fn main() {
         let tcp_header_length = tcp_header.get_header_length();
         let payload = &buf[4 + ipv4_header_length + tcp_header_length..nbytes];
         //check if in hashmap, if not create connection, do on packet, on packet should handle everything
-        let connectionKey = ConnectionKey {
+        let connection_key = ConnectionKey {
             source: (
                 ipv4_header.get_source_address(),
                 tcp_header.get_source_port(),
@@ -42,13 +43,14 @@ fn main() {
                 tcp_header.get_source_port(),
             ),
         };
-        let connection = connections.get_mut(&connectionKey);
+        connections.retain(|_, conn| *conn.get_state() != State::Closed);
+        let connection = connections.get_mut(&connection_key);
         if let Some(c) = connection {
             c.on_packet(&iface, payload, &tcp_header, &ipv4_header);
         } else {
             let mut c = Connection::default();
             c.on_packet(&iface, payload, &tcp_header, &ipv4_header);
-            connections.insert(connectionKey, c);
+            connections.insert(connection_key, c);
         }
     }
 }
