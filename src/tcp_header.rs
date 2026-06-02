@@ -85,6 +85,10 @@ impl<'a> TcpHeader<'a> {
         self.flags.fin
     }
 
+    pub fn is_rst(&self) -> bool {
+        self.flags.rst
+    }
+
     fn get_source_and_destination_port(buf: &[u8]) -> (u16, u16) {
         let source_port = u16::from_be_bytes([buf[0], buf[1]]);
         let destination_port = u16::from_be_bytes([buf[2], buf[3]]);
