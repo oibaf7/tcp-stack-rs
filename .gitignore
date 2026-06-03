@@ -1,3 +1,4 @@
 /target
 *.sh
 notes.md
+.idea/
