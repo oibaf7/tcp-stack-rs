@@ -40,7 +40,7 @@ fn main() {
             ),
             destination: (
                 ipv4_header.get_destination_address(),
-                tcp_header.get_source_port(),
+                tcp_header.get_destination_port(),
             ),
         };
         connections.retain(|_, conn| *conn.get_state() != State::Closed);

@@ -21,7 +21,7 @@ enum Action {
     CloseConnection,
 }
 
-#[derive(Eq, PartialEq)]
+#[derive(Eq, PartialEq, Debug)]
 pub enum State {
     Closed,
     Listen,
@@ -82,8 +82,6 @@ impl Default for ReceiveSequence {
     }
 }
 
-//make refactor for unexpected receivals in each stage
-
 impl Connection {
     pub fn get_state(&self) -> &State {
         &self.state
@@ -109,7 +107,10 @@ impl Connection {
         match result {
             Action::Proceed => self.proceed_with_action(nic, tcp_header, ipv4_header, content),
             //send with no body to not change next sequence number
-            Action::Discard => self.send_ack(nic, tcp_header, ipv4_header, &[]),
+            Action::Discard => {
+                eprintln!("discarding, sending ack with rcv.nxt={}", self.receive_sequence.nxt);
+                self.send_challenge_ack(nic, tcp_header, ipv4_header, &[])
+            },
             Action::RST => self.send_rst(nic, tcp_header, ipv4_header),
             Action::CloseConnection => self.state = State::Closed,
         }
@@ -117,6 +118,18 @@ impl Connection {
     }
 
     fn proceed_with_action(&mut self, nic: &Iface, tcp_header: &TcpHeader, ipv4_header: &IPV4Header, content: &[u8]) {
+        eprintln!("proceed: state={:?} is_ack={} is_fin={} content_len={}",
+                  self.state,
+                  tcp_header.is_ack(),
+                  tcp_header.is_fin(),
+                  content.len()
+        );
+
+        if self.state == State::Estab && tcp_header.is_ack() && content.len() == 0 && !tcp_header.is_fin() {
+            self.send_sequence.una = tcp_header.get_acknowledgment_number();
+            return;
+        }
+
         match self.state {
             State::Closed => return,
             State::Listen => self.send_syn_ack(nic, tcp_header, ipv4_header),
@@ -131,7 +144,8 @@ impl Connection {
                     return;
                 }
 
-                self.send_ack(nic, tcp_header, ipv4_header, content);
+                //self.send_ack(nic, tcp_header, ipv4_header, content);
+                self.echo_with_ack(nic, tcp_header, ipv4_header, content);
             }
             State::LastAck => self.state = State::Closed,
             _ => return,
@@ -153,14 +167,14 @@ impl Connection {
                 _ => false,
             };
         });
-        let options: Vec<TcpOption> = Self::extract_option(timestamp);
+        let options: Vec<TcpOption> = Self::extract_option(tcp_header, timestamp);
         let flags = TcpFlags {
             syn: true,
             ack_flag: true,
             ..Default::default()
         };
-        let new_tcp_header = self.make_tcp_header(tcp_header, ipv4_header, flags, &options);
-        let new_ipv4_header = Self::make_ipv4_header(&new_tcp_header, ipv4_header);
+        let new_tcp_header = self.make_tcp_header(tcp_header, ipv4_header, flags, &options, &[]);
+        let new_ipv4_header = Self::make_ipv4_header(&new_tcp_header, ipv4_header, &[]);
         vec.extend_from_slice(&new_ipv4_header[..]);
         vec.extend_from_slice(&new_tcp_header[..]);
         nic.send(&vec).expect("unable to send");
@@ -175,6 +189,7 @@ impl Connection {
     ) {
         self.state = State::Estab;
         self.send_sequence.wnd = tcp_header.get_window_size() as u32;
+        self.send_sequence.una = tcp_header.get_acknowledgment_number();
     }
 
     fn send_ack<'a>(
@@ -192,13 +207,39 @@ impl Connection {
                 _ => false,
             };
         });
-        let options: Vec<TcpOption> = Self::extract_option(timestamp);
+        let options: Vec<TcpOption> = Self::extract_option(tcp_header, timestamp);
         let flags = TcpFlags {
             ack_flag: true,
             ..Default::default()
         };
-        let new_tcp_header = self.make_tcp_header(tcp_header, ipv4_header, flags, &options);
-        let new_ipv4_header = Self::make_ipv4_header(&new_tcp_header, ipv4_header);
+        let new_tcp_header = self.make_tcp_header(tcp_header, ipv4_header, flags, &options, &[]);
+        let new_ipv4_header = Self::make_ipv4_header(&new_tcp_header, ipv4_header, &[]);
+        vec.extend_from_slice(&new_ipv4_header[..]);
+        vec.extend_from_slice(&new_tcp_header[..]);
+        nic.send(&vec).expect("unable to send");
+    }
+
+    fn send_challenge_ack<'a>(
+        &mut self,
+        nic: &Iface,
+        tcp_header: &TcpHeader,
+        ipv4_header: &IPV4Header,
+        content: &'a [u8],
+    ) {
+        let mut vec = Vec::from(TUN_HEADER);
+        let timestamp = tcp_header.get_options().iter().find(|x| {
+            return match x {
+                TcpOption::Timestamp { .. } => true,
+                _ => false,
+            };
+        });
+        let options: Vec<TcpOption> = Self::extract_option(tcp_header, timestamp);
+        let flags = TcpFlags {
+            ack_flag: true,
+            ..Default::default()
+        };
+        let new_tcp_header = self.make_tcp_header(tcp_header, ipv4_header, flags, &options, &[]);
+        let new_ipv4_header = Self::make_ipv4_header(&new_tcp_header, ipv4_header, &[]);
         vec.extend_from_slice(&new_ipv4_header[..]);
         vec.extend_from_slice(&new_tcp_header[..]);
         nic.send(&vec).expect("unable to send");
@@ -213,17 +254,18 @@ impl Connection {
                 _ => false,
             };
         });
-        let options: Vec<TcpOption> = Self::extract_option(timestamp);
+        let options: Vec<TcpOption> = Self::extract_option(tcp_header, timestamp);
         let flags = TcpFlags {
             fin: true,
             ack_flag: true,
             ..Default::default()
         };
-        let new_tcp_header = self.make_tcp_header(tcp_header, ipv4_header, flags, &options);
-        let new_ipv4_header = Self::make_ipv4_header(&new_tcp_header, ipv4_header);
+        let new_tcp_header = self.make_tcp_header(tcp_header, ipv4_header, flags, &options, &[]);
+        let new_ipv4_header = Self::make_ipv4_header(&new_tcp_header, ipv4_header, &[]);
         vec.extend_from_slice(&new_ipv4_header[..]);
         vec.extend_from_slice(&new_tcp_header[..]);
         nic.send(&vec).expect("unable to send");
+        self.send_sequence.nxt += 1;
     }
 
     fn send_rst(&mut self, nic: &Iface, tcp_header: &TcpHeader, ipv4_header: &IPV4Header) {
@@ -235,31 +277,64 @@ impl Connection {
                 _ => false,
             };
         });
-        let options: Vec<TcpOption> = Self::extract_option(timestamp);
+        let options: Vec<TcpOption> = Self::extract_option(tcp_header, timestamp);
         let flags = TcpFlags {
             rst: true,
             ..Default::default()
         };
-        let new_tcp_header = self.make_tcp_header(tcp_header, ipv4_header, flags, &options);
-        let new_ipv4_header = Self::make_ipv4_header(&new_tcp_header, ipv4_header);
+        let new_tcp_header = self.make_tcp_header(tcp_header, ipv4_header, flags, &options, &[]);
+        let new_ipv4_header = Self::make_ipv4_header(&new_tcp_header, ipv4_header, &[]);
         vec.extend_from_slice(&new_ipv4_header[..]);
         vec.extend_from_slice(&new_tcp_header[..]);
         nic.send(&vec).expect("unable to send");
     }
 
-    //eventually look into determining options based on state (syn vs ack etc...)
-    fn extract_option<'a>(timestamp: Option<&TcpOption>) -> Vec<TcpOption<'a>> {
+    //then need to react to ack, maybe add branch to preprocessing if it is an ack
+    //to fix, check if content is correct
+    fn echo_with_ack(&mut self, nic: &Iface, tcp_header: &TcpHeader, ipv4_header: &IPV4Header, content: &[u8]) {
+        eprintln!("send_ack called with content_len={} rcv.nxt before={}",
+                  content.len(), self.receive_sequence.nxt);
+        self.receive_sequence.nxt += content.len() as u32;
+        let mut vec = Vec::from(TUN_HEADER);
+        let timestamp = tcp_header.get_options().iter().find(|x| {
+            return match x {
+                TcpOption::Timestamp { .. } => true,
+                _ => false,
+            };
+        });
+        let options: Vec<TcpOption> = Self::extract_option(tcp_header, timestamp);
+        let flags = TcpFlags {
+            ack_flag: true,
+            ..Default::default()
+        };
+        let new_tcp_header = self.make_tcp_header(tcp_header, ipv4_header, flags, &options, content);
+        let new_ipv4_header = Self::make_ipv4_header(&new_tcp_header, ipv4_header, content);
+        vec.extend_from_slice(&new_ipv4_header[..]);
+        vec.extend_from_slice(&new_tcp_header[..]);
+        vec.extend_from_slice(content);
+        self.send_sequence.nxt += content.len() as u32;
+        nic.send(&vec).expect("unable to send");
+    }
+
+    //eventually look into determining options based on state (syn vs ack etc...) and do it correctly
+    fn extract_option<'a>(tcp_header: &TcpHeader, timestamp: Option<&TcpOption>) -> Vec<TcpOption<'a>> {
+        //check if syn
         match timestamp {
-            Some(TcpOption::Timestamp { tsval, .. }) => vec![
-                TcpOption::Mss(DEFAULT_MSS),
-                TcpOption::SackPermitted,
-                TcpOption::Timestamp {
-                    tsval: 0,
+            Some(TcpOption::Timestamp { tsval, .. }) => {
+                let ts = TcpOption::Timestamp {
+                    tsval: SystemTime::now()
+                        .duration_since(UNIX_EPOCH)
+                        .unwrap()
+                        .as_millis() as u32,
                     tsecr: *tsval,
-                },
-                TcpOption::WindowScale(DEFAULT_WINDOW_SCALE),
-            ],
-            _ => vec![TcpOption::Mss(1460)],
+                };
+                if tcp_header.is_syn() {
+                    vec![TcpOption::Mss(DEFAULT_MSS), TcpOption::SackPermitted, ts, TcpOption::WindowScale(DEFAULT_WINDOW_SCALE)]
+                } else {
+                    vec![ts]
+                }
+            }
+            _ => if tcp_header.is_syn() { vec![TcpOption::Mss(DEFAULT_MSS)] } else { vec![] },
         }
     }
 
@@ -269,6 +344,7 @@ impl Connection {
         ipv4_header: &IPV4Header,
         flags: TcpFlags,
         options: &[TcpOption],
+        content: &[u8],
     ) -> Vec<u8> {
         TcpHeader::build_raw_header(
             tcp_header.get_destination_port(),
@@ -281,17 +357,17 @@ impl Connection {
             Some(&options),
             ipv4_header.get_destination_address(),
             ipv4_header.get_source_address(),
-            &[],
+            content,
         )
     }
 
-    fn make_ipv4_header(tcp_header: &[u8], ipv4_header: &IPV4Header) -> Vec<u8> {
+    fn make_ipv4_header(tcp_header: &[u8], ipv4_header: &IPV4Header, content: &[u8]) -> Vec<u8> {
         IPV4Header::build_raw_header(
             IPV4_VERSION,
             5,
             0,
             0,
-            20 + (tcp_header.len() as u16),
+            20 + (tcp_header.len() as u16) + (content.len() as u16),
             0,
             0,
             0,
@@ -311,6 +387,9 @@ impl Connection {
     }
 
     fn validity_of_ack(unack: u32, ack: u32, nxt: u32) -> bool {
+        if unack == nxt {
+            return ack == unack;
+        }
         if unack < nxt {
             if unack < ack && ack <= nxt {
                 return true;
@@ -370,6 +449,14 @@ impl Connection {
                 self.receive_sequence.nxt + self.receive_sequence.wnd,
             )) && self.receive_sequence.wnd != 0
         };
+
+        eprintln!("seq check: seq={} rcv.nxt={} wnd={} acceptable={}",
+                  tcp_header.get_sequence_number(),
+                  self.receive_sequence.nxt,
+                  self.receive_sequence.wnd,
+                  acceptable_seq
+        );
+
         acceptable_seq
     }
 
@@ -390,7 +477,7 @@ impl Connection {
             self.send_sequence.una,
             tcp_header.get_acknowledgment_number(),
             self.send_sequence.nxt,
-        ) {
+        ) && self.send_sequence.una != self.send_sequence.nxt{
             return Action::RST;
         }
 
@@ -410,7 +497,7 @@ impl Connection {
             return Action::RST;
         }
 
-        if !Self::validity_of_ack(
+        if self.state == State::SynRecvd && !Self::validity_of_ack(
             self.send_sequence.una,
             tcp_header.get_acknowledgment_number(),
             self.send_sequence.nxt,
