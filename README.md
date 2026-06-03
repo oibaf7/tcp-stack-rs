@@ -81,27 +81,6 @@ With `nc`:
 echo "hello" | nc 192.168.0.2 7878
 ```
 
-With Python:
-```python
-import socket
-
-s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-s.connect(('192.168.0.2', 7878))
-s.send(b'hello')
-print(s.recv(1024))
-s.close()
-```
-
-## Implementation Notes
-
-**Sequence number validation** follows RFC 793, with explicit handling of the wraparound case and the zero-window edge case where only `rcv.nxt == seq` is acceptable.
-
-**ACK validation** skips the strict `SND.UNA < SEG.ACK` check when nothing is in flight (`una == nxt`), since a duplicate ACK in that state is valid and should not trigger a RST.
-
-**Timestamp handling** follows RFC 1323: outgoing `TSval` is set to the current clock, and `TSecr` echoes the sender's `TSval`. Options are scoped to context — SYN segments include MSS, SACK_PERM, timestamp, and window scale; data/ACK segments carry only the timestamp.
-
-**Connection cleanup** uses `HashMap::retain` to remove closed connections before each packet lookup, preventing stale entries from incorrectly handling new SYNs on reused ports.
-
 ## State Machine
 
 ```
